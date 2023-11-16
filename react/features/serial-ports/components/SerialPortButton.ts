@@ -10,10 +10,9 @@ import { IconSerialPort } from '../../base/icons/svg';
 import AbstractButton, { IProps as AbstractButtonProps } from '../../base/toolbox/components/AbstractButton';
 import { isVpaasMeeting } from '../../jaas/functions';
 
-import EmbedMeetingDialog from './EmbedMeetingDialog';
 
 /**
- * Implementation of a button for opening embed meeting dialog.
+ * Implementation of a button for using Web Serial API.
  */
 class SerialPortButton extends AbstractButton<AbstractButtonProps> {
     accessibilityLabel = 'toolbar.accessibilityLabel.serialPort';
@@ -31,7 +30,7 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
         const { dispatch } = this.props;
 
         // sendAnalytics(createToolbarEvent('embed.meeting'));
-        dispatch(openDialog(EmbedMeetingDialog));
+        // TODO: New function here
     }
 }
 

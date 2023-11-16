@@ -29,7 +29,6 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
     _handleClick() {
         const { dispatch } = this.props;
 
-        // sendAnalytics(createToolbarEvent('embed.meeting'));
         // TODO: New function here
     }
 }

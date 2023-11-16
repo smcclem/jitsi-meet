@@ -22,6 +22,7 @@ export const TOOLBAR_BUTTONS: ToolbarButton[] = [
     'desktop',
     'download',
     'embedmeeting',
+    'serialport',
     'etherpad',
     'feedback',
     'filmstrip',

@@ -6,6 +6,7 @@ import { isJwtFeatureEnabled } from '../base/jwt/functions';
 import { IGUMPendingState } from '../base/media/types';
 import ChatButton from '../chat/components/web/ChatButton';
 import EmbedMeetingButton from '../embed-meeting/components/EmbedMeetingButton';
+import SerialPortButton from '../serial-ports/components/SerialPortButton';
 import SharedDocumentButton from '../etherpad/components/SharedDocumentButton.web';
 import FeedbackButton from '../feedback/components/FeedbackButton.web';
 import InviteButton from '../invite/components/add-people-dialog/web/InviteButton';
@@ -378,6 +379,12 @@ export function getAllToolboxButtons(_customToolbarButtons?: {
         group: 4
     };
 
+    const serial = {
+        key: 'serialport',
+        Content: SerialPortButton,
+        group: 4
+    };
+    
     const feedback = {
         key: 'feedback',
         Content: FeedbackButton,
@@ -439,6 +446,7 @@ export function getAllToolboxButtons(_customToolbarButtons?: {
         settings,
         shortcuts,
         embed,
+        serial,
         feedback,
         download,
         help,

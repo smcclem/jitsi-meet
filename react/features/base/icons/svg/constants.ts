@@ -132,6 +132,7 @@ export const DEFAULT_ICON: Record<string, any> = {
     IconCloseLarge,
     IconCloudUpload,
     IconCode,
+    IconSerialPort,
     IconConnection,
     IconConnectionInactive,
     IconCopy,

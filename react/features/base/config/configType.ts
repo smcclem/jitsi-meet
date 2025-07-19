@@ -5,6 +5,7 @@ export type ToolbarButton = 'camera' |
     'download' |
     'embedmeeting' |
     'serialport' |
+    'serialportTS890' |
     'etherpad' |
     'feedback' |
     'filmstrip' |
@@ -44,6 +45,7 @@ type ButtonsWithNotifyClick = 'camera' |
     'download' |
     'embedmeeting' |
     'serialport' |
+    'serialportTS890' |    
     'end-meeting' |
     'etherpad' |
     'feedback' |

@@ -19,6 +19,7 @@ import { default as IconCloseLarge } from './close-large.svg';
 import { default as IconCloudUpload } from './cloud-upload.svg';
 import { default as IconCode } from './code.svg';
 import { default as IconSerialPort } from './serialport.svg';
+import { default as IconSerialPortTS890 } from './serialport.svg';
 import { default as IconConnection } from './connection.svg';
 import { default as IconRecordContact } from './contact-record.svg';
 import { default as IconCopy } from './copy.svg';
@@ -133,6 +134,7 @@ export const DEFAULT_ICON: Record<string, any> = {
     IconCloudUpload,
     IconCode,
     IconSerialPort,
+    IconSerialPortTS890,
     IconConnection,
     IconConnectionInactive,
     IconCopy,

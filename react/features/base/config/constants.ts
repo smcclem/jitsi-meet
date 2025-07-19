@@ -23,6 +23,7 @@ export const TOOLBAR_BUTTONS: ToolbarButton[] = [
     'download',
     'embedmeeting',
     'serialport',
+    'serialportTS890',    
     'etherpad',
     'feedback',
     'filmstrip',

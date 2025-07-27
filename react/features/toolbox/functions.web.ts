@@ -7,6 +7,7 @@ import { IGUMPendingState } from '../base/media/types';
 import ChatButton from '../chat/components/web/ChatButton';
 import EmbedMeetingButton from '../embed-meeting/components/EmbedMeetingButton';
 import SerialPortButton from '../serial-ports/components/SerialPortButton';
+import SerialPortButtonK3Radio2 from '../serial-ports/components/SerialPortButtonK3Radio2';
 import SerialPortButtonTS890 from '../serial-ports/components/SerialPortButtonTS890';
 import SharedDocumentButton from '../etherpad/components/SharedDocumentButton.web';
 import FeedbackButton from '../feedback/components/FeedbackButton.web';
@@ -386,6 +387,12 @@ export function getAllToolboxButtons(_customToolbarButtons?: {
         group: 4
     };
 
+    const serialK3Radio2 = {
+        key: 'serialportK3Radio2',
+        Content: SerialPortButtonK3Radio2,
+        group: 4
+    };
+
     const serialTS890 = {
         key: 'serialportTS890',
         Content: SerialPortButtonTS890,
@@ -454,6 +461,7 @@ export function getAllToolboxButtons(_customToolbarButtons?: {
         shortcuts,
         embed,
         serial,
+        serialK3Radio2,
         serialTS890,
         feedback,
         download,

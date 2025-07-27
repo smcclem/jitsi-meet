@@ -313,6 +313,7 @@
         "e2eeWillDisableDueToMaxModeDescription": "WARNING: End-to-End Encryption will be automatically disabled if more participants join the conference.",
         "embedMeeting": "Embed meeting",
         "serialPort": "K3 Serial Port (RRL)",
+        "serialPortK3": "K3 Radio 2 Serial Port (RRL)",
         "serialPortTS890": "TS890 Serial Port (RRL)",
         "enterDisplayName": "Enter your name",
         "error": "Error",
@@ -503,6 +504,9 @@
     "serialPort": {
         "title": "K3 Serial Port (RRL)"
     },
+    "serialPortK3Radio2": {
+        "title": "K3 Radio 2 Serial Port (RRL)"
+    },   
     "serialPortTS890": {
         "title": "TS890 Serial Port (RRL)"
     },        
@@ -1192,6 +1196,7 @@
             "download": "Download our apps",
             "embedMeeting": "Embed meeting",
             "serialPort": "K3 Serial Port (RRL)",
+            "serialPortK3Radio2": "K3 Radio 2 Serial Port (RRL)",
             "serialPortTS890": "TS890 Serial Port (RRL)",            
             "endConference": "End meeting for all",
             "enterFullScreen": "View full screen",
@@ -1283,6 +1288,7 @@
         "e2ee": "End-to-End Encryption",
         "embedMeeting": "Embed meeting",
         "serialPort": "K3 Serial Port (RRL)",
+        "serialPortK3Radio2": "K3 Radio 2 Serial Port (RRL)",
         "serialPortTS890": "TS890 Serial Port (RRL)",             
         "enableNoiseSuppression": "Enable noise suppression",
         "endConference": "End meeting for all",

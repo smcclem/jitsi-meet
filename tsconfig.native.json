@@ -24,6 +24,7 @@
         "react/features/desktop-picker",
         "react/features/e2ee",
         "react/features/embed-meeting",
+        "react/features/serial-port",
         "react/features/face-landmarks",
         "react/features/no-audio-signal",
         "react/features/noise-suppression",

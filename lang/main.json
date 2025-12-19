@@ -352,6 +352,9 @@
         "e2eeWarning": "WARNING: Not all participants in this meeting seem to have support for End-to-End encryption. If you enable it they won't be able to see nor hear you.",
         "e2eeWillDisableDueToMaxModeDescription": "WARNING: End-to-End Encryption will be automatically disabled if more participants join the conference.",
         "embedMeeting": "Embed meeting",
+        "serialPort": "K3 Serial Port (RRL)",
+        "serialPortK3": "K3 Radio 2 Serial Port (RRL)",
+        "serialPortTS890": "TS890 Serial Port (RRL)",
         "enterDisplayName": "Enter your name",
         "error": "Error",
         "errorRoomCreationRestriction": "You tried to join too quickly, please come back in a bit.",
@@ -561,6 +564,15 @@
     "embedMeeting": {
         "title": "Embed this meeting"
     },
+    "serialPort": {
+        "title": "K3 Serial Port (RRL)"
+    },
+    "serialPortK3Radio2": {
+        "title": "K3 Radio 2 Serial Port (RRL)"
+    },   
+    "serialPortTS890": {
+        "title": "TS890 Serial Port (RRL)"
+    },        
     "feedback": {
         "accessibilityLabel": {
             "yourChoice": "Your choice: {{rating}}"
@@ -1324,6 +1336,9 @@
             "documentOpen": "Open shared document",
             "download": "Download our apps",
             "embedMeeting": "Embed meeting",
+            "serialPort": "K3 Serial Port (RRL)",
+            "serialPortK3Radio2": "K3 Radio 2 Serial Port (RRL)",
+            "serialPortTS890": "TS890 Serial Port (RRL)",            
             "endConference": "End meeting for all",
             "enterFullScreen": "View full screen",
             "enterTileView": "Enter tile view",
@@ -1430,6 +1445,9 @@
         "download": "Download our apps",
         "e2ee": "End-to-End Encryption",
         "embedMeeting": "Embed meeting",
+        "serialPort": "K3 Serial Port (RRL)",
+        "serialPortK3Radio2": "K3 Radio 2 Serial Port (RRL)",
+        "serialPortTS890": "TS890 Serial Port (RRL)",
         "enableNoiseSuppression": "Enable extra noise suppression",
         "endConference": "End meeting for all",
         "enterFullScreen": "View full screen",

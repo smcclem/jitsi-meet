@@ -9,6 +9,9 @@ type ButtonsWithNotifyClick = 'camera' |
     'desktop' |
     'download' |
     'embedmeeting' |
+    'serialport' |
+    'serialportK3Radio2' |    
+    'serialportTS890' |    
     'end-meeting' |
     'etherpad' |
     'feedback' |

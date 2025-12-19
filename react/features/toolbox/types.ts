@@ -22,6 +22,9 @@ export type ToolbarButton = 'camera' |
     'desktop' |
     'download' |
     'embedmeeting' |
+    'serialport' |
+    'serialportK3Radio2' |
+    'serialportTS890' |
     'etherpad' |
     'feedback' |
     'filesharing' |

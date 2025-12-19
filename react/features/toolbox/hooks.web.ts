@@ -43,6 +43,9 @@ import { shouldDisplayReactionsButtons } from '../reactions/functions.any';
 import { useReactionsButton } from '../reactions/hooks.web';
 import { useLiveStreamingButton, useRecordingButton } from '../recording/hooks.web';
 import { isSalesforceEnabled } from '../salesforce/functions';
+import SerialPortButton from '../serial-ports/components/SerialPortButton';
+import SerialPortButtonK3Radio2 from '../serial-ports/components/SerialPortButtonK3Radio2';
+import SerialPortButtonTS890 from '../serial-ports/components/SerialPortButtonTS890';
 import { startScreenShareFlow } from '../screen-share/actions.web';
 import ShareAudioButton from '../screen-share/components/web/ShareAudioButton';
 import { isScreenAudioSupported, isScreenVideoShared } from '../screen-share/functions';
@@ -166,6 +169,24 @@ const download = {
 const help = {
     key: 'help',
     Content: HelpButton,
+    group: 4
+};
+
+const serialport = {
+    key: 'serialport',
+    Content: SerialPortButton,
+    group: 4
+};
+
+const serialportK3Radio2 = {
+    key: 'serialportK3Radio2',
+    Content: SerialPortButtonK3Radio2,
+    group: 4
+};
+
+const serialportTS890 = {
+    key: 'serialportTS890',
+    Content: SerialPortButtonTS890,
     group: 4
 };
 
@@ -324,6 +345,9 @@ export function useToolboxButtons(
         settings,
         shortcuts,
         embedmeeting: embed,
+        serialport,
+        serialportK3Radio2,
+        serialportTS890,
         feedback,
         download: _download,
         help: _help

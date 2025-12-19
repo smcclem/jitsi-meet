@@ -23,6 +23,8 @@
         "react/features/desktop-picker",
         "react/features/e2ee",
         "react/features/embed-meeting",
+        "react/features/serial-port",
+        "react/features/serial-ports",
         "react/features/face-landmarks",
         "react/features/keyboard-shortcuts",
         "react/features/no-audio-signal",

@@ -70,7 +70,7 @@ async function _recoverLocalAudioTrackAfterStop(store: IStore, stoppedJitsiTrack
 
     try {
         const { dispatch, getState } = store;
-        // Windows/RDP device re-enumeration can take several seconds; retry while the user is
+        // Device re-enumeration can take several seconds; retry while the user is
         // still expected to be sending audio (unmuted).
         const started = Date.now();
         const maxDurationMs = 20000;
@@ -228,7 +228,7 @@ MiddlewareRegistry.register(store => next => action => {
         }
 
         if (jitsiTrack.isLocal() && jitsiTrack.getType() === MEDIA_TYPE.AUDIO) {
-            // In Chromium on Windows, device re-enumeration (e.g. RDP reconnect) may end the underlying
+            // In Chromium, device re-enumeration may end the underlying
             // MediaStreamTrack while the UI still shows the same selected mic. Attempt to recover by recreating
             // the local audio track while audio is expected to be unmuted.
             void _recoverLocalAudioTrackAfterStop(store, jitsiTrack);

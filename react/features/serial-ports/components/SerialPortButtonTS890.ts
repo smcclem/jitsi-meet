@@ -94,7 +94,7 @@ class SerialPortButtonTS890 extends AbstractButton<AbstractButtonProps> {
             await this.port.setSignals({ dataTerminalReady: true, requestToSend: true });
 
             const textDecoder = new TextDecoderStream();
-            this.port.readable
+            (this.port.readable as unknown as ReadableStream<BufferSource>)
                 .pipeTo(textDecoder.writable)
                 .catch(e => console.warn('Pipe error:', e));
 

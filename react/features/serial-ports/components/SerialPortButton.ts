@@ -22,6 +22,7 @@ interface SerialPortExtended {
         parity?: 'none' | 'even' | 'odd';
         dataBits?: 7 | 8;
         stopBits?: 1 | 1.5 | 2;
+        bufferSize?: number;
         flowControl?: 'none' | 'hardware';
     }): Promise<void>;
     close(): Promise<void>;
@@ -29,6 +30,9 @@ interface SerialPortExtended {
         dataTerminalReady?: boolean;
         requestToSend?: boolean;
     }): Promise<void>;
+    getSignals(): Promise<{
+        clearToSend?: boolean;
+    }>;
 }
 
 class SerialPortButton extends AbstractButton<AbstractButtonProps> {
@@ -42,42 +46,58 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
     reader: ReadableStreamDefaultReader<string> | null = null;
     socket: WebSocket | null = null;
 
+    private clientIp: string | null = null;
+
+    private shutdownRequested = false;
+
+    private pingTimer: ReturnType<typeof setInterval> | null = null;
+    private pongCheck: ReturnType<typeof setInterval> | null = null;
+
+    private psInterval: ReturnType<typeof setInterval> | null = null;
+    private psTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+    private psAwaiting = false;
+    private psScanBuf = '';
+
+    private signalPollTimer: ReturnType<typeof setInterval> | null = null;
+    private lastCTS: boolean | undefined;
+
+    private static readonly ONE_MIB = 1024 * 1024;
+    private static readonly PS_POLL_MS = 5_000;
+    private static readonly PS_TIMEOUT_MS = 2_000;
+    private static readonly PTT_POLL_MS = 100;
+
     _handleClick() {
         this.connectSerialPort();
         sendAnalytics(createToolbarEvent('serial.port'));
     }
 
-    /**
-     * Discover local IP via a STUN-based RTCPeerConnection trick
-     */
     private async getClientIP(): Promise<string> {
-        const pc = new RTCPeerConnection({
-            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-        });
-        return new Promise((resolve, reject) => {
-            pc.onicecandidate = e => {
-                if (!e.candidate) {
-                    reject(new Error('Could not find ICE candidate'));
-                    return;
-                }
-                const m = /([0-9]{1,3}(?:\.[0-9]{1,3}){3})/.exec(e.candidate.candidate);
-                if (m) {
-                    resolve(m[1]);
-                    pc.close();
-                }
-            };
-            // some browsers require a data channel before they gather
-            pc.createDataChannel('');
-            pc.createOffer()
-              .then(offer => pc.setLocalDescription(offer))
-              .catch(reject);
-        });
+        if (this.clientIp) {
+            return this.clientIp;
+        }
+
+        const resp = await fetch('https://api.ipify.org?format=json');
+
+        if (!resp.ok) {
+            throw new Error(`IP fetch failed: ${resp.status}`);
+        }
+
+        const { ip } = await resp.json() as { ip: string; };
+
+        this.clientIp = ip;
+
+        return ip;
     }
 
     async connectSerialPort() {
-        const { dispatch } = this.props;
         try {
-            // 1) get the IP
+            // Reset shutdown on manual connect.
+            this.shutdownRequested = false;
+
+            // If already connected, reset first.
+            await this.disconnect();
+
+            // 1) get public IP.
             const clientIp = await this.getClientIP();
 
             // 2) ask for a port
@@ -90,6 +110,7 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
                 parity: 'none',
                 dataBits: 8,
                 stopBits: 1,
+                bufferSize: SerialPortButton.ONE_MIB,
                 flowControl: 'none'
             });
             // force DTR/RTS low
@@ -98,7 +119,7 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
             // 4) start text decoding
             const textDecoder = new TextDecoderStream();
             // catch pipe errors
-            this.port.readable
+            (this.port.readable as unknown as ReadableStream<BufferSource>)
                 .pipeTo(textDecoder.writable)
                 .catch(e => console.error('Pipe error:', e));
 
@@ -112,32 +133,143 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
             this.readLoop().catch(e =>
                 console.error('ReadLoop error:', e)
             );
+
+            // 7) Start periodic serial polling (PS;).
+            this.startPsPolling();
+
+            // 8) Start PTT (CTS) monitor.
+            this.startSignalMonitor();
         } catch (e) {
             console.error('Connection error:', e);
         }
     }
 
     initializeWebSocket(clientIp: string) {
-        this.socket = new WebSocket(
-            `wss://station.wu2x.com:8443/webRRL/websocket2?clientIp=${encodeURIComponent(clientIp)}`
-        );
+        // Clean up any existing socket + heartbeat timers.
+        if (this.socket) {
+            this.socket.onopen = null;
+            this.socket.onmessage = null;
+            this.socket.onerror = null;
+            this.socket.onclose = null;
+
+            this.stopHeartbeat();
+
+            if (this.socket.readyState !== WebSocket.CLOSED) {
+                try {
+                    this.socket.close();
+                } catch (_) {
+                    // ignore
+                }
+            }
+        }
+
+        const url = `wss://station.wu2x.com:8443/webRRL/websocket2?clientIp=${encodeURIComponent(clientIp)}`;
+
+        this.socket = new WebSocket(url);
+
+        let lastPong = Date.now();
 
         this.socket.addEventListener('open', () => {
-            console.log('WebSocket connected');
+            lastPong = Date.now();
+            this.startHeartbeat(() => lastPong, (t: number) => {
+                lastPong = t;
+            });
         });
 
-        this.socket.addEventListener('message', ev => {
-            this.writeData(ev.data);
+        this.socket.addEventListener('message', async event => {
+            // heartbeat
+            if (typeof event.data === 'string') {
+                try {
+                    const msg = JSON.parse(event.data) as { type?: string; };
+                    if (msg.type === 'pong') {
+                        lastPong = Date.now();
+                        return;
+                    }
+                } catch (_) {
+                    // not JSON
+                }
+
+                await this.writeData(event.data);
+            } else if (event.data instanceof Blob) {
+                const text = await event.data.text();
+
+                await this.writeData(text);
+            }
+        });
+
+        this.socket.addEventListener('error', () => {
+            // let onclose handle reconnect
         });
 
         this.socket.addEventListener('close', () => {
-            console.log('WS closed — reconnecting in 3s');
-            setTimeout(() => this.initializeWebSocket(clientIp), 3000);
+            this.stopHeartbeat();
+            this.scheduleReconnect();
         });
+    }
 
-        this.socket.addEventListener('error', ev => {
-            console.error('WebSocket error:', ev);
-        });
+    private startHeartbeat(getLastPong: () => number, setLastPong: (t: number) => void) {
+        this.stopHeartbeat();
+
+        // send a ping every 25s
+        this.pingTimer = setInterval(() => {
+            if (!this.socket || this.shutdownRequested || this.socket.readyState !== WebSocket.OPEN) {
+                return;
+            }
+            try {
+                this.socket.send(JSON.stringify({ type: 'ping', t: Date.now() }));
+            } catch (_) {
+                // ignore transient errors
+            }
+        }, 25_000);
+
+        // check every 5s whether pong is stale (>35s)
+        this.pongCheck = setInterval(() => {
+            if (this.shutdownRequested) {
+                return;
+            }
+            if (Date.now() - getLastPong() > 35_000) {
+                try {
+                    this.socket?.close();
+                } catch (_) {
+                    // ignore
+                }
+            }
+        }, 5_000);
+
+        setLastPong(Date.now());
+    }
+
+    private stopHeartbeat() {
+        if (this.pingTimer) {
+            clearInterval(this.pingTimer);
+            this.pingTimer = null;
+        }
+        if (this.pongCheck) {
+            clearInterval(this.pongCheck);
+            this.pongCheck = null;
+        }
+    }
+
+    private scheduleReconnect() {
+        if (this.shutdownRequested) {
+            return;
+        }
+
+        if (this.socket && this.socket.readyState !== WebSocket.CLOSED) {
+            try {
+                this.socket.close();
+            } catch (_) {
+                // ignore
+            }
+        }
+
+        // break recursion with a small delay
+        setTimeout(() => {
+            if (this.shutdownRequested || !this.clientIp) {
+                return;
+            }
+            this.initializeWebSocket(this.clientIp);
+        }, 100);
     }
 
     private async readLoop() {
@@ -146,8 +278,27 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
             if (done) {
                 break;
             }
-            if (value && this.socket?.readyState === WebSocket.OPEN) {
-                this.socket.send(value);
+            if (value) {
+                // scan for PS replies in serial stream
+                this.psScanBuf += value;
+                if (this.psScanBuf.length > 2048) {
+                    this.psScanBuf = this.psScanBuf.slice(-1024);
+                }
+                if (this.psAwaiting && /PS[^;]*;/.test(this.psScanBuf)) {
+                    this.psAwaiting = false;
+                    if (this.psTimeoutTimer) {
+                        clearTimeout(this.psTimeoutTimer);
+                        this.psTimeoutTimer = null;
+                    }
+                }
+
+                if (this.socket?.readyState === WebSocket.OPEN) {
+                    try {
+                        this.socket.send(value);
+                    } catch (_) {
+                        // ignore transient errors
+                    }
+                }
             }
         }
     }
@@ -157,30 +308,146 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
             return;
         }
         const enc = new TextEncoder();
-        await this.writer.write(enc.encode(data + '\n'));
+        await this.writer.write(enc.encode(data));
+    }
+
+    private startSignalMonitor() {
+        this.stopSignalMonitor();
+
+        this.signalPollTimer = setInterval(async () => {
+            if (this.shutdownRequested || !this.port) {
+                return;
+            }
+
+            try {
+                const sig = await this.port.getSignals();
+                const cts = Boolean(sig.clearToSend);
+
+                if (cts !== this.lastCTS) {
+                    this.lastCTS = cts;
+                    if (this.socket?.readyState === WebSocket.OPEN) {
+                        try {
+                            this.socket.send(cts ? 'TX;' : 'RX;');
+                        } catch (_) {
+                            // ignore
+                        }
+                    }
+                }
+            } catch (_) {
+                this.stopSignalMonitor();
+            }
+        }, SerialPortButton.PTT_POLL_MS);
+    }
+
+    private stopSignalMonitor() {
+        if (this.signalPollTimer) {
+            clearInterval(this.signalPollTimer);
+            this.signalPollTimer = null;
+        }
+        this.lastCTS = undefined;
+    }
+
+    private startPsPolling() {
+        this.stopPsPolling();
+
+        // fire one immediately so logic is exercised on connect
+        this.issuePsPoll();
+        this.psInterval = setInterval(() => this.issuePsPoll(), SerialPortButton.PS_POLL_MS);
+    }
+
+    private stopPsPolling() {
+        if (this.psInterval) {
+            clearInterval(this.psInterval);
+            this.psInterval = null;
+        }
+        if (this.psTimeoutTimer) {
+            clearTimeout(this.psTimeoutTimer);
+            this.psTimeoutTimer = null;
+        }
+        this.psAwaiting = false;
+    }
+
+    private issuePsPoll() {
+        if (!this.writer || this.shutdownRequested) {
+            return;
+        }
+
+        try {
+            void this.writeData('PS;');
+        } catch (_) {
+            // ignore
+        }
+
+        this.psAwaiting = true;
+        if (this.psTimeoutTimer) {
+            clearTimeout(this.psTimeoutTimer);
+            this.psTimeoutTimer = null;
+        }
+
+        this.psTimeoutTimer = setTimeout(() => {
+            if (!this.psAwaiting) {
+                return;
+            }
+            this.psAwaiting = false;
+
+            // shutdown everything, no reconnect
+            this.shutdownRequested = true;
+            this.stopPsPolling();
+            this.stopSignalMonitor();
+            void this.disconnect();
+        }, SerialPortButton.PS_TIMEOUT_MS);
     }
 
     componentWillUnmount() {
-        this.disconnect();
+        this.shutdownRequested = true;
+        void this.disconnect();
     }
 
     private async disconnect() {
+        this.stopPsPolling();
+        this.stopSignalMonitor();
+        this.stopHeartbeat();
+
         if (this.reader) {
-            await this.reader.cancel();
-            this.reader.releaseLock();
+            try {
+                await this.reader.cancel();
+            } catch (_) {
+                // ignore
+            }
+            try {
+                this.reader.releaseLock();
+            } catch (_) {
+                // ignore
+            }
             this.reader = null;
         }
         if (this.writer) {
-            await this.writer.close();
-            this.writer.releaseLock();
+            try {
+                await this.writer.close();
+            } catch (_) {
+                // ignore
+            }
+            try {
+                this.writer.releaseLock();
+            } catch (_) {
+                // ignore
+            }
             this.writer = null;
         }
         if (this.port) {
-            await this.port.close();
+            try {
+                await this.port.close();
+            } catch (_) {
+                // ignore
+            }
             this.port = null;
         }
         if (this.socket) {
-            this.socket.close();
+            try {
+                this.socket.close();
+            } catch (_) {
+                // ignore
+            }
             this.socket = null;
         }
     }

@@ -1,3 +1,4 @@
+import React from 'react';
 import { connect } from 'react-redux';
 import { createToolbarEvent } from '../../analytics/AnalyticsEvents';
 import { sendAnalytics } from '../../analytics/functions';
@@ -7,6 +8,30 @@ import { IconSerialPort } from '../../base/icons/svg';
 import AbstractButton, { IProps as AbstractButtonProps } from '../../base/toolbox/components/AbstractButton';
 import { isMobileBrowser } from '../../base/environment/utils';
 import { isVpaasMeeting } from '../../jaas/functions';
+import { showWarningNotification } from '../../notifications/actions';
+import { showSuccessNotification } from '../../notifications/actions';
+import { showNotification } from '../../notifications/actions';
+import { NOTIFICATION_TIMEOUT_TYPE } from '../../notifications/constants';
+import { NOTIFICATION_TYPE } from '../../notifications/constants';
+import { setSerialPortConnected, setSerialPortStatus } from '../actions';
+import SerialConnectionLed from './SerialConnectionLed';
+
+const SERIAL_TRACE = true;
+
+function _trace(prefix: string, message: string, extra?: any) {
+    if (!SERIAL_TRACE) {
+        return;
+    }
+
+    // Keep output human-friendly and grep-able.
+    // eslint-disable-next-line no-console
+    console.log(`[serial][${prefix}] ${message}`, extra ?? '');
+}
+
+interface IProps extends AbstractButtonProps {
+    serialConnected?: boolean;
+    serialStatus?: string;
+}
 
 interface NavigatorWithSerial extends Navigator {
     serial: {
@@ -35,23 +60,33 @@ interface SerialPortExtended {
     }>;
 }
 
-class SerialPortButton extends AbstractButton<AbstractButtonProps> {
-    accessibilityLabel = 'toolbar.accessibilityLabel.serialPort';
-    icon = IconSerialPort;
-    label = 'toolbar.serialPort';
-    tooltip = 'toolbar.serialPort';
+class SerialPortButton extends AbstractButton<IProps> {
+    override accessibilityLabel = 'toolbar.accessibilityLabel.serialPort';
+    override icon = IconSerialPort;
+    override label = 'toolbar.serialPort';
+    override tooltip = 'toolbar.serialPort';
 
     port: SerialPortExtended | null = null;
     writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
     reader: ReadableStreamDefaultReader<string> | null = null;
     socket: WebSocket | null = null;
 
+    private decodeAbortController: AbortController | null = null;
+    private decodePipe: Promise<void> | null = null;
+
     private clientIp: string | null = null;
 
     private shutdownRequested = false;
 
+    // When we intentionally close the socket as part of a local reset (e.g. during connect),
+    // we must suppress the close handler from scheduling an auto-reconnect.
+    private suppressNextSocketCloseEffects = false;
+
     private pingTimer: ReturnType<typeof setInterval> | null = null;
     private pongCheck: ReturnType<typeof setInterval> | null = null;
+
+    private wsUnavailableNotified = false;
+    private reconnectRequested = false;
 
     private psInterval: ReturnType<typeof setInterval> | null = null;
     private psTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
@@ -60,15 +95,57 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
 
     private signalPollTimer: ReturnType<typeof setInterval> | null = null;
     private lastCTS: boolean | undefined;
+    private signalPollInFlight = false;
+
+    private serialWriteChain: Promise<void> = Promise.resolve();
+
+    private static readonly RADIO_ID = 'k3Radio1';
+
+    private static activeInstance: SerialPortButton | null = null;
+
+    private lastConnected = false;
 
     private static readonly ONE_MIB = 1024 * 1024;
     private static readonly PS_POLL_MS = 5_000;
     private static readonly PS_TIMEOUT_MS = 2_000;
     private static readonly PTT_POLL_MS = 100;
 
-    _handleClick() {
+    override _handleClick() {
+        _trace(SerialPortButton.RADIO_ID, `_handleClick: serialConnected=${String(Boolean(this.props.serialConnected))}`);
+        if (this.props.serialConnected) {
+            // Treat second click as a manual disconnect.
+            // The overflow menu can remount this component; disconnect the currently active instance.
+            const active = SerialPortButton.activeInstance ?? this;
+
+            active.shutdownRequested = true;
+            _trace(SerialPortButton.RADIO_ID, 'manual disconnect requested', {
+                activeIsThis: active === this
+            });
+
+            void active.disconnect();
+
+            return;
+        }
+
         this.connectSerialPort();
         sendAnalytics(createToolbarEvent('serial.port'));
+    }
+
+    override _getElementAfter() {
+        // Only show the LED in overflow/context menu rendering.
+        if (!this.props.showLabel) {
+            return null;
+        }
+
+        const status = this.props.serialStatus;
+        if (status === 'connected') {
+            return React.createElement(SerialConnectionLed, { status: 'connected' });
+        }
+        if (status === 'connecting' || status === 'reconnecting') {
+            return React.createElement(SerialConnectionLed, { status: 'warning' });
+        }
+
+        return null;
     }
 
     private async getClientIP(): Promise<string> {
@@ -91,18 +168,45 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
 
     async connectSerialPort() {
         try {
-            // Reset shutdown on manual connect.
-            this.shutdownRequested = false;
+            _trace(SerialPortButton.RADIO_ID, 'connectSerialPort: start', {
+                hasPort: Boolean(this.port),
+                hasSocket: Boolean(this.socket),
+                shutdownRequested: this.shutdownRequested,
+                activeIsThis: SerialPortButton.activeInstance === this
+            });
+            // Closing/reopening the overflow menu can create multiple instances; make sure any previous
+            // active instance is shut down before establishing a new connection.
+            if (SerialPortButton.activeInstance && SerialPortButton.activeInstance !== this) {
+                _trace(SerialPortButton.RADIO_ID, 'connectSerialPort: tearing down previous active instance');
+                SerialPortButton.activeInstance.shutdownRequested = true;
+                SerialPortButton.activeInstance.lastConnected = false;
+                await SerialPortButton.activeInstance.disconnect();
+            }
+
+            SerialPortButton.activeInstance = this;
+
+            this.props.dispatch(setSerialPortConnected(SerialPortButton.RADIO_ID, false));
+            this.props.dispatch(setSerialPortStatus(SerialPortButton.RADIO_ID, 'connecting'));
+            this.wsUnavailableNotified = false;
 
             // If already connected, reset first.
-            await this.disconnect();
+            // IMPORTANT: suppress auto-reconnect while we reset existing resources.
+            this.shutdownRequested = true;
+            const hadExistingSocket = Boolean(this.socket);
+            this.suppressNextSocketCloseEffects = hadExistingSocket;
+            _trace(SerialPortButton.RADIO_ID, 'connectSerialPort: reset disconnect (suppress reconnect)');
+            await this.disconnect({ clearActiveInstance: false });
+            this.suppressNextSocketCloseEffects = false;
+            this.shutdownRequested = false;
 
             // 1) get public IP.
             const clientIp = await this.getClientIP();
+            _trace(SerialPortButton.RADIO_ID, 'connectSerialPort: got clientIp', clientIp);
 
             // 2) ask for a port
             const nav = navigator as unknown as NavigatorWithSerial;
             this.port = await nav.serial.requestPort();
+            _trace(SerialPortButton.RADIO_ID, 'connectSerialPort: serial port selected');
 
             // 3) open with extra options
             await this.port.open({
@@ -113,21 +217,27 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
                 bufferSize: SerialPortButton.ONE_MIB,
                 flowControl: 'none'
             });
+            _trace(SerialPortButton.RADIO_ID, 'connectSerialPort: port.open complete');
             // force DTR/RTS low
             await this.port.setSignals({ dataTerminalReady: false, requestToSend: false });
+            _trace(SerialPortButton.RADIO_ID, 'connectSerialPort: setSignals complete');
 
             // 4) start text decoding
             const textDecoder = new TextDecoderStream();
             // catch pipe errors
-            (this.port.readable as unknown as ReadableStream<BufferSource>)
-                .pipeTo(textDecoder.writable)
+            this.decodeAbortController?.abort();
+            this.decodeAbortController = new AbortController();
+            this.decodePipe = (this.port.readable as unknown as ReadableStream<BufferSource>)
+                .pipeTo(textDecoder.writable, { signal: this.decodeAbortController.signal })
                 .catch(e => console.error('Pipe error:', e));
 
             this.reader = textDecoder.readable.getReader();
             this.writer = this.port.writable.getWriter();
+            _trace(SerialPortButton.RADIO_ID, 'connectSerialPort: reader/writer acquired');
 
             // 5) start the WS using the client IP
             this.initializeWebSocket(clientIp);
+            _trace(SerialPortButton.RADIO_ID, 'connectSerialPort: initializeWebSocket called');
 
             // 6) pump serial→WS
             this.readLoop().catch(e =>
@@ -139,12 +249,38 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
 
             // 8) Start PTT (CTS) monitor.
             this.startSignalMonitor();
+
+            _trace(SerialPortButton.RADIO_ID, 'connectSerialPort: done');
         } catch (e) {
+            this.props.dispatch(setSerialPortConnected(SerialPortButton.RADIO_ID, false));
+            this.shutdownRequested = false;
             console.error('Connection error:', e);
+
+            const radio = this.props.t(this.label) as unknown as string;
+            const message = (e as any)?.message ? String((e as any).message) : String(e);
+
+            this.props.dispatch(showWarningNotification({
+                title: `${radio}: connect failed`,
+                description: message
+            }, NOTIFICATION_TIMEOUT_TYPE.STICKY));
+
+            _trace(SerialPortButton.RADIO_ID, 'connectSerialPort: failed', e);
         }
     }
 
     initializeWebSocket(clientIp: string) {
+        _trace(SerialPortButton.RADIO_ID, 'initializeWebSocket: start', {
+            clientIp,
+            existingSocket: Boolean(this.socket),
+            shutdownRequested: this.shutdownRequested
+        });
+
+        // Update status while attempting connection.
+        this.props.dispatch(setSerialPortStatus(
+            SerialPortButton.RADIO_ID,
+            this.reconnectRequested ? 'reconnecting' : 'connecting'
+        ));
+        this.reconnectRequested = false;
         // Clean up any existing socket + heartbeat timers.
         if (this.socket) {
             this.socket.onopen = null;
@@ -170,7 +306,22 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
         let lastPong = Date.now();
 
         this.socket.addEventListener('open', () => {
+            _trace(SerialPortButton.RADIO_ID, 'ws: open');
             lastPong = Date.now();
+            this.props.dispatch(setSerialPortConnected(SerialPortButton.RADIO_ID, true));
+            this.props.dispatch(setSerialPortStatus(SerialPortButton.RADIO_ID, 'connected'));
+            this.wsUnavailableNotified = false;
+
+            if (!this.lastConnected) {
+                this.props.dispatch(showSuccessNotification({
+                    titleKey: 'serialPorts.connected',
+                    titleArguments: {
+                        radio: this.props.t(this.label) as unknown as string
+                    }
+                }, NOTIFICATION_TIMEOUT_TYPE.SHORT));
+            }
+
+            this.lastConnected = true;
             this.startHeartbeat(() => lastPong, (t: number) => {
                 lastPong = t;
             });
@@ -189,21 +340,57 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
                     // not JSON
                 }
 
-                await this.writeData(event.data);
+                this.queueSerialWrite(event.data);
             } else if (event.data instanceof Blob) {
                 const text = await event.data.text();
 
-                await this.writeData(text);
+                this.queueSerialWrite(text);
             }
         });
 
         this.socket.addEventListener('error', () => {
+            _trace(SerialPortButton.RADIO_ID, 'ws: error');
             // let onclose handle reconnect
         });
 
         this.socket.addEventListener('close', () => {
+            _trace(SerialPortButton.RADIO_ID, 'ws: close', {
+                shutdownRequested: this.shutdownRequested,
+                suppressNextSocketCloseEffects: this.suppressNextSocketCloseEffects,
+                lastConnected: this.lastConnected
+            });
             this.stopHeartbeat();
-            this.scheduleReconnect();
+            this.props.dispatch(setSerialPortConnected(SerialPortButton.RADIO_ID, false));
+
+            const suppress = this.suppressNextSocketCloseEffects;
+            this.suppressNextSocketCloseEffects = false;
+
+            if (this.lastConnected && !suppress) {
+                this.props.dispatch(showWarningNotification({
+                    titleKey: 'serialPorts.disconnected',
+                    titleArguments: {
+                        radio: this.props.t(this.label) as unknown as string
+                    }
+                }, NOTIFICATION_TIMEOUT_TYPE.SHORT));
+            } else if (!this.shutdownRequested && !suppress && !this.wsUnavailableNotified) {
+                this.wsUnavailableNotified = true;
+                this.props.dispatch(showWarningNotification({
+                    titleKey: 'serialPorts.reconnecting',
+                    titleArguments: {
+                        radio: this.props.t(this.label) as unknown as string
+                    }
+                }, NOTIFICATION_TIMEOUT_TYPE.SHORT));
+            }
+
+            this.lastConnected = false;
+            if (!this.shutdownRequested && !suppress) {
+                this.props.dispatch(setSerialPortStatus(SerialPortButton.RADIO_ID, 'reconnecting'));
+            } else {
+                this.props.dispatch(setSerialPortStatus(SerialPortButton.RADIO_ID, 'disconnected'));
+            }
+            if (!suppress) {
+                this.scheduleReconnect();
+            }
         });
     }
 
@@ -252,8 +439,13 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
 
     private scheduleReconnect() {
         if (this.shutdownRequested) {
+            _trace(SerialPortButton.RADIO_ID, 'scheduleReconnect: suppressed due to shutdownRequested');
             return;
         }
+
+        this.reconnectRequested = true;
+
+        _trace(SerialPortButton.RADIO_ID, 'scheduleReconnect: scheduling');
 
         if (this.socket && this.socket.readyState !== WebSocket.CLOSED) {
             try {
@@ -266,8 +458,13 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
         // break recursion with a small delay
         setTimeout(() => {
             if (this.shutdownRequested || !this.clientIp) {
+                _trace(SerialPortButton.RADIO_ID, 'scheduleReconnect: aborted', {
+                    shutdownRequested: this.shutdownRequested,
+                    hasClientIp: Boolean(this.clientIp)
+                });
                 return;
             }
+            _trace(SerialPortButton.RADIO_ID, 'scheduleReconnect: reconnecting now');
             this.initializeWebSocket(this.clientIp);
         }, 100);
     }
@@ -303,12 +500,19 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
         }
     }
 
-    async writeData(data: string) {
-        if (!this.writer) {
+    private queueSerialWrite(data: string) {
+        const writer = this.writer;
+
+        if (!writer || this.shutdownRequested) {
             return;
         }
+
+        // Preserve ordering but avoid blocking the WS 'message' handler.
+        // Errors are expected during shutdown/abort; swallow them.
         const enc = new TextEncoder();
-        await this.writer.write(enc.encode(data));
+        this.serialWriteChain = this.serialWriteChain
+            .then(() => writer.write(enc.encode(data)) as unknown as Promise<void>)
+            .catch(() => undefined);
     }
 
     private startSignalMonitor() {
@@ -318,6 +522,14 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
             if (this.shutdownRequested || !this.port) {
                 return;
             }
+
+            // If the event loop is busy, async intervals can overlap and pile up.
+            // Keep at most one getSignals() in flight.
+            if (this.signalPollInFlight) {
+                return;
+            }
+
+            this.signalPollInFlight = true;
 
             try {
                 const sig = await this.port.getSignals();
@@ -335,6 +547,8 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
                 }
             } catch (_) {
                 this.stopSignalMonitor();
+            } finally {
+                this.signalPollInFlight = false;
             }
         }, SerialPortButton.PTT_POLL_MS);
     }
@@ -373,7 +587,7 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
         }
 
         try {
-            void this.writeData('PS;');
+            this.queueSerialWrite('PS;');
         } catch (_) {
             // ignore
         }
@@ -390,75 +604,140 @@ class SerialPortButton extends AbstractButton<AbstractButtonProps> {
             }
             this.psAwaiting = false;
 
+            this.props.dispatch(showWarningNotification({
+                titleKey: 'serialPorts.noResponse',
+                titleArguments: {
+                    radio: this.props.t(this.label) as unknown as string
+                }
+            }, NOTIFICATION_TIMEOUT_TYPE.STICKY));
+
             // shutdown everything, no reconnect
             this.shutdownRequested = true;
+            _trace(SerialPortButton.RADIO_ID, 'PS timeout: shutdownRequested=true, disconnecting');
+            this.props.dispatch(setSerialPortConnected(SerialPortButton.RADIO_ID, false));
+            this.lastConnected = false;
             this.stopPsPolling();
             this.stopSignalMonitor();
             void this.disconnect();
         }, SerialPortButton.PS_TIMEOUT_MS);
     }
 
-    componentWillUnmount() {
-        this.shutdownRequested = true;
-        void this.disconnect();
+    override componentWillUnmount() {
+        // This button is mounted inside the overflow menu, so it may unmount when
+        // the menu closes. We do NOT want that to implicitly disconnect the radio.
+        // Disconnection happens only on explicit shutdown (PS timeout) or manual code paths.
     }
 
-    private async disconnect() {
+    private async disconnect({ clearActiveInstance = true }: { clearActiveInstance?: boolean; } = {}) {
+        _trace(SerialPortButton.RADIO_ID, 'disconnect: start', {
+            shutdownRequested: this.shutdownRequested,
+            hasPort: Boolean(this.port),
+            hasSocket: Boolean(this.socket),
+            hasReader: Boolean(this.reader),
+            hasWriter: Boolean(this.writer)
+        });
+        this.props.dispatch(setSerialPortConnected(SerialPortButton.RADIO_ID, false));
+        this.props.dispatch(setSerialPortStatus(SerialPortButton.RADIO_ID, 'disconnected'));
         this.stopPsPolling();
         this.stopSignalMonitor();
         this.stopHeartbeat();
 
-        if (this.reader) {
+        // Close the WS first so the bridge releases the radio even if the WebSerial shutdown hangs.
+        const socket = this.socket;
+        this.socket = null;
+
+        if (socket) {
             try {
-                await this.reader.cancel();
+                socket.close(1000, 'client disconnect');
+                _trace(SerialPortButton.RADIO_ID, 'disconnect: socket.close called');
             } catch (_) {
                 // ignore
             }
-            try {
-                this.reader.releaseLock();
-            } catch (_) {
-                // ignore
-            }
-            this.reader = null;
         }
-        if (this.writer) {
+
+        const reader = this.reader;
+        this.reader = null;
+
+        const decodeAbortController = this.decodeAbortController;
+        const decodePipe = this.decodePipe;
+        this.decodeAbortController = null;
+        this.decodePipe = null;
+
+        if (decodeAbortController) {
             try {
-                await this.writer.close();
+                decodeAbortController.abort();
+                _trace(SerialPortButton.RADIO_ID, 'disconnect: decodeAbortController.abort called');
             } catch (_) {
                 // ignore
             }
-            try {
-                this.writer.releaseLock();
-            } catch (_) {
-                // ignore
-            }
-            this.writer = null;
         }
-        if (this.port) {
+
+        if (decodePipe) {
             try {
-                await this.port.close();
+                await decodePipe;
             } catch (_) {
                 // ignore
             }
-            this.port = null;
         }
-        if (this.socket) {
+
+        if (reader) {
             try {
-                this.socket.close();
+                await reader.cancel();
             } catch (_) {
                 // ignore
             }
-            this.socket = null;
+            try {
+                reader.releaseLock();
+            } catch (_) {
+                // ignore
+            }
         }
+
+        const writer = this.writer;
+        this.writer = null;
+
+        if (writer) {
+            try {
+                // Abort immediately instead of graceful close to avoid hanging on pending writes.
+                await writer.abort();
+            } catch (_) {
+                // ignore
+            }
+            try {
+                writer.releaseLock();
+            } catch (_) {
+                // ignore
+            }
+        }
+
+        const port = this.port;
+        this.port = null;
+
+        if (port) {
+            try {
+                await port.close();
+                _trace(SerialPortButton.RADIO_ID, 'disconnect: port.close complete');
+            } catch (_) {
+                // ignore
+            }
+        }
+
+        if (clearActiveInstance && SerialPortButton.activeInstance === this) {
+            SerialPortButton.activeInstance = null;
+        }
+
+        _trace(SerialPortButton.RADIO_ID, 'disconnect: done');
     }
 
-    render() {
+    override render() {
         // we still just render the toolbar button
         return super.render();
     }
 }
 
 const mapStateToProps = (state: IReduxState) => ({
+    serialConnected: Boolean(state['features/serial-ports']?.connectedById?.k3Radio1),
+    serialStatus: state['features/serial-ports']?.statusById?.k3Radio1,
     visible: !isVpaasMeeting(state) && !isMobileBrowser() && 'serial' in navigator
 });
 

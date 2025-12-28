@@ -111,7 +111,9 @@ export default class ToolboxItem extends AbstractToolboxItem<IProps> {
                     onClick = { onClick }
                     onKeyDown = { onKeyDown }
                     onKeyPress = { this._onKeyPress }
-                    text = { this.label } />
+                    text = { this.label }>
+                    { elementAfter }
+                </ContextMenuItem>
             );
         }
         let children = (

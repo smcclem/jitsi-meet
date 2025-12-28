@@ -1712,6 +1712,13 @@
         "title": "Secure, fully featured, and completely free video conferencing",
         "upcomingMeetings": "Your upcoming meetings"
     },
+    "serialPorts": {
+        "alreadyConnected": "{{radio}} already connected",
+        "connected": "{{radio}} connected",
+        "disconnected": "{{radio}} disconnected",
+        "noResponse": "{{radio}}: no response, disconnecting",
+        "reconnecting": "{{radio}}: bridge unavailable, retrying"
+    },
     "whiteboard": {
         "accessibilityLabel": {
             "heading": "Whiteboard"

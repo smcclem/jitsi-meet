@@ -74,6 +74,7 @@ import { ISpeakerStatsState } from '../speaker-stats/reducer';
 import { ISubtitlesState } from '../subtitles/reducer';
 import { ITalkWhileMutedState } from '../talk-while-muted/reducer';
 import { IToolboxState } from '../toolbox/reducer';
+import { ISerialPortsState } from '../serial-ports/types';
 import { ITranscribingState } from '../transcribing/reducer';
 import { IVideoLayoutState } from '../video-layout/reducer';
 import { IVideoQualityPersistedState, IVideoQualityState } from '../video-quality/reducer';
@@ -157,6 +158,7 @@ export interface IReduxState {
     'features/remote-control': IRemoteControlState;
     'features/screen-share': IScreenShareState;
     'features/screenshot-capture': IScreenshotCaptureState;
+    'features/serial-ports': ISerialPortsState;
     'features/settings': ISettingsState;
     'features/share-room': IShareRoomState;
     'features/shared-video': ISharedVideoState;

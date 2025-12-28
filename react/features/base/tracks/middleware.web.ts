@@ -2,7 +2,7 @@ import { AnyAction } from 'redux';
 
 import { IStore } from '../../app/types';
 import { hideNotification } from '../../notifications/actions';
-import { isPrejoinPageVisible } from '../../prejoin/functions';
+import { isPrejoinPageVisible } from '../../prejoin/functions.any';
 import { setAudioSettings } from '../../settings/actions.web';
 import { getAvailableDevices } from '../devices/actions.web';
 import { SET_AUDIO_MUTED } from '../media/actionTypes';
@@ -11,6 +11,7 @@ import {
     MEDIA_TYPE,
     VIDEO_TYPE
 } from '../media/constants';
+import { isAudioMuted } from '../media/functions';
 import { IGUMPendingState } from '../media/types';
 import MiddlewareRegistry from '../redux/MiddlewareRegistry';
 
@@ -22,6 +23,7 @@ import {
     TRACK_STOPPED,
     TRACK_UPDATED
 } from './actionTypes';
+import { _disposeAndRemoveTracks } from './actions.any';
 import {
     createLocalTracksA,
     showNoDataFromSourceVideoError,
@@ -32,13 +34,125 @@ import {
 import {
     getLocalJitsiAudioTrackSettings,
     getLocalTrack,
-    getTrackByJitsiTrack, isUserInteractionRequiredForUnmute, logTracksForParticipant,
+    getTrackByJitsiTrack,
+    isUserInteractionRequiredForUnmute,
+    logTracksForParticipant,
     setTrackMuted
 } from './functions.web';
+import logger from './logger';
 import { ITrack, ITrackOptions } from './types';
+
 
 import './middleware.any';
 import './subscriber.web';
+
+let _micAutoRecoveryInFlight = false;
+let _lastMicAutoRecoveryTs = 0;
+
+function _sleep(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function _recoverLocalAudioTrackAfterStop(store: IStore, stoppedJitsiTrack: any) {
+    if (_micAutoRecoveryInFlight) {
+        return;
+    }
+
+    // Basic throttling to avoid loops if lib fires multiple stop events.
+    const now = Date.now();
+
+    if (now - _lastMicAutoRecoveryTs < 1000) {
+        return;
+    }
+
+    _lastMicAutoRecoveryTs = now;
+    _micAutoRecoveryInFlight = true;
+
+    try {
+        const { dispatch, getState } = store;
+        // Device re-enumeration can take several seconds; retry while the user is
+        // still expected to be sending audio (unmuted).
+        const started = Date.now();
+        const maxDurationMs = 20000;
+        let attempts = 0;
+
+        // Remove the stopped track from redux/conference once, if still present.
+        {
+            const state = getState();
+            const stoppedTrack = getTrackByJitsiTrack(state['features/base/tracks'], stoppedJitsiTrack);
+
+            if (stoppedTrack?.local && stoppedTrack.mediaType === MEDIA_TYPE.AUDIO) {
+                await dispatch(_disposeAndRemoveTracks([ stoppedJitsiTrack ]));
+            }
+        }
+
+        while (Date.now() - started < maxDurationMs) {
+            const elapsedMs = Date.now() - started;
+
+            const state = getState();
+
+            // Abort if the user muted audio in the meantime, or if we are in prejoin.
+            if (isPrejoinPageVisible(state) || isAudioMuted(state)) {
+                return;
+            }
+
+            // If we are no longer in a conference context, do not attempt recovery.
+            if (!APP.conference) {
+                return;
+            }
+
+            // If we already have a usable local audio track, we're done. Include pending to avoid
+            // starting a second gUM in parallel.
+            const existingAudioTrack = getLocalTrack(state['features/base/tracks'], MEDIA_TYPE.AUDIO, true);
+
+            if (existingAudioTrack?.jitsiTrack && !existingAudioTrack.muted) {
+                return;
+            }
+
+            // If a (replacement) audio track is already being created, just wait for it.
+            if (existingAudioTrack && !existingAudioTrack.jitsiTrack) {
+                await _sleep(250);
+                continue;
+            }
+
+            attempts++;
+
+            logger.warn('Local audio track stopped unexpectedly; attempting auto-recovery', {
+                attempt: attempts,
+                elapsedMs
+            });
+
+            try {
+                // Refresh devices list (helps when devices are re-enumerated).
+                await dispatch(getAvailableDevices());
+
+                // Recreate the local audio track (device selection is resolved from settings + device list).
+                await dispatch(createLocalTracksA({ devices: [ MEDIA_TYPE.AUDIO ] }));
+            } catch (error) {
+                // Transient failures are expected while the OS is re-enumerating devices.
+                // Keep retrying unless the user mutes/leaves.
+                logger.warn('Local audio auto-recovery attempt failed; will retry', error);
+            }
+
+            const newAudioTrack = getLocalTrack(getState()['features/base/tracks'], MEDIA_TYPE.AUDIO);
+
+            if (newAudioTrack?.jitsiTrack && !newAudioTrack.muted) {
+                logger.warn('Local audio track auto-recovery succeeded');
+
+                return;
+            }
+
+            // Progressive backoff.
+            await _sleep(elapsedMs < 2000 ? 250 : (elapsedMs < 6000 ? 500 : 1000));
+        }
+
+        logger.warn('Local audio track auto-recovery gave up after retries');
+    } catch (error) {
+        logger.error('Local audio track auto-recovery failed', error);
+    } finally {
+        _micAutoRecoveryInFlight = false;
+    }
+}
 
 /**
  * Middleware that captures LIB_DID_DISPOSE and LIB_DID_INIT actions and,
@@ -111,6 +225,13 @@ MiddlewareRegistry.register(store => next => action => {
 
         if (jitsiTrack.getVideoType() === VIDEO_TYPE.DESKTOP) {
             store.dispatch(toggleScreensharing(false));
+        }
+
+        if (jitsiTrack.isLocal() && jitsiTrack.getType() === MEDIA_TYPE.AUDIO) {
+            // In Chromium, device re-enumeration may end the underlying
+            // MediaStreamTrack while the UI still shows the same selected mic. Attempt to recover by recreating
+            // the local audio track while audio is expected to be unmuted.
+            void _recoverLocalAudioTrackAfterStop(store, jitsiTrack);
         }
         break;
     }

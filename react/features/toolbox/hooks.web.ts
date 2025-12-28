@@ -43,6 +43,7 @@ import { shouldDisplayReactionsButtons } from '../reactions/functions.any';
 import { useReactionsButton } from '../reactions/hooks.web';
 import { useLiveStreamingButton, useRecordingButton } from '../recording/hooks.web';
 import { isSalesforceEnabled } from '../salesforce/functions';
+import '../serial-ports/reducer';
 import SerialPortButton from '../serial-ports/components/SerialPortButton';
 import SerialPortButtonK3Radio2 from '../serial-ports/components/SerialPortButtonK3Radio2';
 import SerialPortButtonTS890 from '../serial-ports/components/SerialPortButtonTS890';

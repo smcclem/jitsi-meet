@@ -50,6 +50,8 @@ deploy-appbundle:
 		$(BUILD_DIR)/alwaysontop.min.js.map \
 		$(BUILD_DIR)/face-landmarks-worker.min.js \
 		$(BUILD_DIR)/face-landmarks-worker.min.js.map \
+		$(BUILD_DIR)/serial-bridge-worker.min.js \
+		$(BUILD_DIR)/serial-bridge-worker.min.js.map \
 		$(BUILD_DIR)/noise-suppressor-worklet.min.js \
 		$(BUILD_DIR)/noise-suppressor-worklet.min.js.map \
 		$(BUILD_DIR)/screenshot-capture-worker.min.js \

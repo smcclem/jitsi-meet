@@ -360,6 +360,15 @@ module.exports = (_env, argv) => {
                 ...getBundleAnalyzerPlugin(analyzeBundle, 'face-landmarks-worker')
             ],
             performance: getPerformanceHints(perfHintOptions, 1024 * 1024 * 2) },
+        { ...config,
+            entry: {
+                'serial-bridge-worker': './react/features/serial-ports/serialBridgeWorker.ts'
+            },
+            plugins: [
+                ...config.plugins,
+                ...getBundleAnalyzerPlugin(analyzeBundle, 'serial-bridge-worker')
+            ],
+            performance: getPerformanceHints(perfHintOptions, 1024 * 1024 * 2) },
         { ...config, /**
              * The NoiseSuppressorWorklet is loaded in an audio worklet which doesn't have the same
              * context as a normal window, (e.g. self/window is not defined).
